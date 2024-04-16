@@ -1,0 +1,159 @@
+// app.js
+const express = require('express');
+const mysql = require('mysql');
+const jwt = require('jsonwebtoken');
+
+const app = express();
+app.use(express.json());
+
+// MySQL connection
+const connection = mysql.createConnection({
+  host: 'localhost',
+  user: 'your_username',
+  password: 'your_password',
+  database: 'cricbuzz'
+});
+
+connection.connect((err) => {
+  if (err) throw err;
+  console.log('Connected to MySQL!');
+});
+
+// Admin registration
+app.post('/api/admin/signup', (req, res) => {
+  const { username, password, email } = req.body;
+  const query = 'INSERT INTO users (username, password, email, role) VALUES (?, ?, ?, ?)';
+  connection.query(query, [username, password, email, 'admin'], (err, result) => {
+    if (err) throw err;
+    res.status(200).json({
+      status: 'Admin Account successfully created',
+      status_code: 200,
+      user_id: result.insertId
+    });
+  });
+});
+
+// Admin login
+app.post('/api/admin/login', (req, res) => {
+  const { username, password } = req.body;
+  const query = 'SELECT * FROM users WHERE username = ? AND password = ?';
+  connection.query(query, [username, password], (err, result) => {
+    if (err) throw err;
+    if (result.length > 0) {
+      const user = result[0];
+      if (user.role === 'admin') {
+        const token = jwt.sign({ userId: user.id }, 'your_secret_key');
+        res.status(200).json({
+          status: 'Login successful',
+          status_code: 200,
+          user_id: user.id,
+          access_token: token
+        });
+      } else {
+        res.status(401).json({
+          status: 'Incorrect username/password provided. Please retry',
+          status_code: 401
+        });
+      }
+    } else {
+      res.status(401).json({
+        status: 'Incorrect username/password provided. Please retry',
+        status_code: 401
+      });
+    }
+  });
+});
+
+// Create match (admin only)
+app.post('/api/matches', verifyToken, (req, res) => {
+  const { team_1, team_2, date, venue } = req.body;
+  const query = 'INSERT INTO matches (team_1, team_2, date, venue) VALUES (?, ?, ?, ?)';
+  connection.query(query, [team_1, team_2, date, venue], (err, result) => {
+    if (err) throw err;
+    res.status(200).json({
+      message: 'Match created successfully',
+      match_id: result.insertId
+    });
+  });
+});
+
+// Get match schedules (guest)
+app.get('/api/matches', (req, res) => {
+  const query = 'SELECT * FROM matches';
+  connection.query(query, (err, results) => {
+    if (err) throw err;
+    res.status(200).json({
+      matches: results
+    });
+  });
+});
+
+// Get match details (guest)
+app.get('/api/matches/:matchId', (req, res) => {
+  const matchId = req.params.matchId;
+  const query = 'SELECT * FROM matches WHERE id = ?';
+  connection.query(query, [matchId], (err, result) => {
+    if (err) throw err;
+    if (result.length > 0) {
+      const match = result[0];
+      const squadQuery = 'SELECT * FROM players WHERE team_id IN (?, ?)';
+      connection.query(squadQuery, [match.team_1_id, match.team_2_id], (err, players) => {
+        if (err) throw err;
+        res.status(200).json({
+          match_id: match.id,
+          team_1: match.team_1,
+          team_2: match.team_2,
+          date: match.date,
+          venue: match.venue,
+          status: match.status,
+          squads: [
+            { team_id: match.team_1_id, players: players.filter(player => player.team_id === match.team_1_id) },
+            { team_id: match.team_2_id, players: players.filter(player => player.team_id === match.team_2_id) }
+          ]
+        });
+      });
+    } else {
+      res.status(404).json({ error: 'Match not found' });
+    }
+  });
+});
+
+// Add a team member to a squad (admin only)
+app.post('/api/teams/:teamId/squad', verifyToken, (req, res) => {
+  const teamId = req.params.teamId;
+  const { name, role } = req.body;
+  const query = 'INSERT INTO players (name, role, team_id) VALUES (?, ?, ?)';
+  connection.query(query, [name, role, teamId], (err, result) => {
+    if (err) throw err;
+    res.status(200).json({
+      message: 'Player added to squad successfully',
+      player_id: result.insertId
+    });
+  });
+});
+
+// Get player statistics (logged in user)
+app.get('/api/players/:playerId/stats', verifyToken, (req, res) => {
+  const playerId = req.params.playerId;
+  const query = 'SELECT * FROM player_stats WHERE player_id = ?';
+  connection.query(query, [playerId], (err, results) => {
+    if (err) throw err;
+    res.status(200).json(results);
+  });
+});
+
+// Middleware to verify token
+function verifyToken(req, res, next) {
+  const token = req.headers.authorization.split(' ')[1];
+  jwt.verify(token, 'your_secret_key', (err, decoded) => {
+    if (err) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+    req.userId = decoded.userId;
+    next();
+  });
+}
+
+app.listen(3000, () => {
+  console.log('Server started on port 3000');
+});
